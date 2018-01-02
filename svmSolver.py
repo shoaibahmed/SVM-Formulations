@@ -34,19 +34,22 @@ print ("Labels:", np.unique(y))
 # Define the objective
 numFeatures = X.shape[1]
 P = cvxopt.matrix(np.eye(numFeatures).astype(np.double))
+P[numFeatures-1, numFeatures-1] = 0.0 # Don't use the bias term in the objective
 q = cvxopt.matrix(np.zeros(numFeatures).astype(np.double))
 
 # Inequality constraints
 # 1 - y_i(w.T * x_i + b) <= 0
-G = cvxopt.matrix(X.astype(np.double))
-h = cvxopt.matrix(np.expand_dims(y.astype(np.double), 1))
+G = -(X * np.expand_dims(y, 1)).astype(np.double)
+G = cvxopt.matrix(G)
+h = cvxopt.matrix(x=-1.0, size=(100, 1))
 
 # Solve the problem
 res = cvxopt.solvers.qp(P=P, q=q, G=G, h=h)
-optimalX = weights = res['x']
+optimalX = weights = np.squeeze(res['x'])
 print ("Optimal Weights:", optimalX)
 
 # Check the classification performance
 predictions = y * np.dot(X, weights)
+print (predictions)
 meanAccuracy = np.mean(predictions > 0)
 print ("Accuracy:", meanAccuracy)
