@@ -66,25 +66,24 @@ optimalAlpha = np.squeeze(res['x'])
 print ("Optimal Alpha:", optimalAlpha)
 
 # Determine b
-supportVectors = optimalAlpha > epsilon
+supportVectors = [idx for idx in range(optimalAlpha.shape[0]) if optimalAlpha[idx] > epsilon]
 supportVectorsAlpha = optimalAlpha[supportVectors]
+print ("Support vectors (Indices):", supportVectors)
 print ("Support vectors (Alpha):", supportVectorsAlpha)
 
 weights = np.zeros(numFeatures)
-for i in range(numExamples):
-	if supportVectors[i]:
-		weights += optimalAlpha[i] * y[i] * X[i]
+for i in supportVectors:
+	weights += optimalAlpha[i] * y[i] * X[i]
 print ("Optimal Weights:", weights)
 
 bInitial = None
-for i in range(numExamples):
-	if supportVectors[i]:
-		# Compute b
-		b = y[i] - (np.dot(weights, X[i, :]))
-		print ("Found b:", b)
-		if bInitial is None:
-			bInitial = b
-		assert (np.abs(bInitial - b) < epsilon)
+for i in supportVectors:
+	# Compute b
+	b = y[i] - (np.dot(weights, X[i, :]))
+	print ("Found b:", b)
+	if bInitial is None:
+		bInitial = b
+	assert (np.abs(bInitial - b) < epsilon)
 
 # Check the classification performance
 predictions = y * (np.dot(X, weights) + b)
