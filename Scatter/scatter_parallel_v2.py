@@ -1,5 +1,6 @@
 from sklearn.datasets import load_svmlight_file, dump_svmlight_file
 import scipy.sparse
+import sklearn.metrics
 import numpy
 import time
 from scatter_qp import QP
@@ -8,6 +9,8 @@ import multiprocessing as mp
 import shutil
 import pickle
 import os
+
+DISPLAY_CONFUSION_MATRIX = False
 
 pickleDir = './PickleDir'
 weightsDir = './Weights'
@@ -20,9 +23,10 @@ numInputFeatures = 1199856
 def parallel(y_entry): 
 	# Load the data
 	y_entry = int(y_entry)
-	fileName = os.path.abspath(os.path.join('./PickleDir', str(y_entry) + '.txt'))
-	dataInClass = load_svmlight_file(fileName, n_features=numInputDims, zero_based=True)
-	g1, currentY = dataInClass[0], dataInClass[1]
+	fileName = os.path.abspath(os.path.join('./PickleDir', str(y_entry) + '_X.npz'))
+	# dataInClass = load_svmlight_file(fileName, n_features=numInputDims, zero_based=True)
+	# g1, currentY = dataInClass[0], dataInClass[1]	
+	g1 = scipy.sparse.load_npz(fileName)
 
 	# g1 = scipy.sparse.hstack([-g1,-numpy.ones((g1.shape[0],1))])
 	g1 = -g1
@@ -33,7 +37,7 @@ def parallel(y_entry):
 
 	# Shape of the weights will vary based on the number of examples in g1
 	# TODO: Change the conversion to np array due to presence of np operations in scatter_qp
-	weights = QP(numInputDims, g1.shape[0], w_bar.toarray(), numpy.ones((g1.shape[0],1)), g1, h1)
+	weights = QP(g1.shape[1] - 1, g1.shape[0], w_bar.toarray(), numpy.ones((g1.shape[0], 1)), g1, h1)
 
 	# Discard the sai_i's
 	weights = weights[:-g1.shape[0]].reshape(-1, 1)
@@ -47,11 +51,13 @@ print ("Loading dataset")
 data = load_svmlight_file(trainFileName, n_features=numInputFeatures, zero_based=True)
 X, y = data[0], data[1]
 X = scipy.sparse.hstack([X, numpy.ones((X.shape[0], 1))])
+X = X.tocsc()
 numInputDims = X.shape[1]
 
 data_val = load_svmlight_file(validationFileName, n_features=numInputFeatures, zero_based=True)
 X_val, y_val = data_val[0], data_val[1]
 X_val = scipy.sparse.hstack([X_val, numpy.ones((X_val.shape[0], 1))])
+X_val = X_val.tocsc()
 
 print ("Number of input dimensions: %d" % numInputDims)
 print ("Train set | X shape: %s | Y shape: %s" % (X.shape, y.shape))
@@ -103,7 +109,7 @@ if resumeTraining:
 	w_bar = scipy.sparse.load_npz(lastWBarFileName)
 	print ("Training will resume from iteration # %d" % (startingIteration))
 else:
-	w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1] + 1, 1)))
+	w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1], 1)))
 
 # Create class specific pickles
 print ("Number of classes found in data file: %d" % y_entries.shape[0])
@@ -123,10 +129,15 @@ if createClassInstanceFiles:
 	os.mkdir(pickleDir)
 
 	for i in range(y_entries.shape[0]):
-		classX = X[y == y_entries[i]]
-		classY = y[y == y_entries[i]]
-		fileName = os.path.abspath(os.path.join(pickleDir, str(int(y_entries[i])) + '.txt'))
-		dump_svmlight_file(classX, classY, f=fileName)
+		booleanIndex = y == y_entries[i]
+		classX = X[booleanIndex]
+		# classY = scipy.sparse.csc_matrix(y[booleanIndex])
+		classY = y[booleanIndex]
+		fileName = os.path.abspath(os.path.join(pickleDir, str(int(y_entries[i])) + '_X.npz'))
+		fileNameY = os.path.abspath(os.path.join(pickleDir, str(int(y_entries[i])) + '_Y.npy'))
+		# dump_svmlight_file(classX, classY, f=fileName)
+		scipy.sparse.save_npz(fileName, classX)
+		numpy.save(fileNameY, classY)
 		print ("Class # %d | Class ID: %d | Data shape: %s | Label shape: %s | Output file: %s" % (i, y_entries[i], classX.shape, classY.shape, fileName))
 
 numIterations = 100
@@ -147,25 +158,26 @@ for i in range(startingIteration, numIterations):
 
 		# w' is the combination of the w's found for each class
 		# Read all of the saved numpy files to compute the optimal hyperplane
-		w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1] + 1, 1)))
-		weightFileList = os.listdir(weightsDir)
+		w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1], 1)))
 		
 		trainScores = []
 		validationScores = []
-		for weightVectorFileName in weightFileList:
+		# for weightVectorFileName in weightFileList:
+		for y_entry in y_entries:
+			fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(int(y_entry)) + '.npz'))
 			# weightVector = numpy.load(os.path.abspath(os.path.join(weightsDir, weightVectorFileName)))
-			weightVector = scipy.sparse.load_npz(os.path.abspath(os.path.join(weightsDir, weightVectorFileName)))
+			weightVector = scipy.sparse.load_npz(fileName)
 			w_bar += weightVector
 
 			# Compute the train set outputs
 			out = X.dot(weightVector)
-			trainScores.append(out.toarray())
+			trainScores.append(numpy.squeeze(out.toarray()))
 
 			# Compute the validation set outputs
 			out = X_val.dot(weightVector)
-			validationScores.append(out.toarray())
+			validationScores.append(numpy.squeeze(out.toarray()))
 
-		w_bar /= len(weightFileList)
+		w_bar /= y_entries.shape[0]
 		fileName = os.path.abspath(os.path.join(weightsDir, 'w_bar_' + str(i) + '.npz'))
 		scipy.sparse.save_npz(fileName, w_bar)
 		# numpy.save(fileName, w_bar)
@@ -186,29 +198,32 @@ for i in range(startingIteration, numIterations):
 		print ("Train predictions shape: %s" % str(predictions_train.shape))
 		print ("Validation predictions shape: %s" % str(predictions_val.shape))
 
-		for pred_iter in predictions_train.shape[0]:
+		for pred_iter in range(predictions_train.shape[0]):
 			predictions_train[pred_iter] = predictions_train[pred_iter]
-		for pred_iter in predictions_val.shape[0]:
+		for pred_iter in range(predictions_val.shape[0]):
 			predictions_val[pred_iter] = predictions_val[pred_iter]
 		
 		# Compare the predictions and the ground-truth
-		predictions_train = np.array(predictions_train)
-		predictions_val = np.array(predictions_val)
-		trainConfMat = confusion_matrix(y, predictions_train)
-		testConfMat = confusion_matrix(y_val, predictions_val)
-		print ("Train confusion matrix:", trainConfMat)
-		print ("Test confusion matrix:", testConfMat)
+		predictions_train = numpy.array(predictions_train)
+		predictions_val = numpy.array(predictions_val)
 
-		accuracy_train = np.mean(predictions_train == y)
-		accuracy_val = np.mean(predictions_val == y_val)
+		if DISPLAY_CONFUSION_MATRIX:
+			trainConfMat = sklearn.metrics.confusion_matrix(y, predictions_train)
+			testConfMat = sklearn.metrics.confusion_matrix(y_val, predictions_val)
+			print ("Train confusion matrix:", trainConfMat)
+			print ("Test confusion matrix:", testConfMat)
+
+		accuracy_train = numpy.mean(predictions_train == y)
+		accuracy_val = numpy.mean(predictions_val == y_val)
 		print ("Accuracy on train set: %f" % accuracy_train)
 		print ("Accuracy on validation set: %f" % accuracy_val)
 		logFile.write ("Accuracy on train set: %f\n" % (accuracy_train))
 		logFile.write ("Accuracy on validation set: %f\n" % (accuracy_val))
 
 	except KeyboardInterrupt:
-		print ("Caught KeyboardInterrupt, terminating workers")
+		print ("Program terminated by user!")
 		pool.terminate()
 		pool.join()
+		break
 
 logFile.close()
