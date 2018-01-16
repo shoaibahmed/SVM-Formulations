@@ -13,6 +13,10 @@ pickleDir = './PickleDir'
 weightsDir = './Weights'
 logFile = open("LogFile.txt", "w")
 
+trainFileName = "train_20.txt"
+validationFileName = "validate_20.txt"
+numInputFeatures = 1199856
+
 def parallel(y_entry): 
 	# Load the data
 	y_entry = int(y_entry)
@@ -20,27 +24,41 @@ def parallel(y_entry):
 	dataInClass = load_svmlight_file(fileName, n_features=numInputDims, zero_based=True)
 	g1, currentY = dataInClass[0], dataInClass[1]
 
-	g1 = scipy.sparse.hstack([-g1,-numpy.ones((g1.shape[0],1))])
+	# g1 = scipy.sparse.hstack([-g1,-numpy.ones((g1.shape[0],1))])
+	g1 = -g1
 	g1 = scipy.sparse.csc_matrix(g1)
 	# h1 = numpy.array([-1+val.dot(w_bar) for val in g1])
 	h1 = g1.dot(w_bar).toarray() - 1
 	h1.shape = (g1.shape[0],1)
 
 	# Shape of the weights will vary based on the number of examples in g1
-	weights = QP(numInputDims,g1.shape[0],w_bar.toarray(),numpy.ones((g1.shape[0],1)),g1,h1)
+	# TODO: Change the conversion to np array due to presence of np operations in scatter_qp
+	weights = QP(numInputDims, g1.shape[0], w_bar.toarray(), numpy.ones((g1.shape[0],1)), g1, h1)
+
 	# Discard the sai_i's
 	weights = weights[:-g1.shape[0]].reshape(-1, 1)
 	weights = scipy.sparse.csc_matrix(weights) # For sparse vectors
 	fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(y_entry) + '.npz'))
 	scipy.sparse.save_npz(fileName, weights)
 	# numpy.save(fileName, weights)
-	print ("Weight vector computed for class: %d" % (y_entry))
+	# print ("Weight vector computed for class: %d" % (y_entry))
 	
 print ("Loading dataset")
-data = load_svmlight_file("train.txt", zero_based=True)
+data = load_svmlight_file(trainFileName, n_features=numInputFeatures, zero_based=True)
 X, y = data[0], data[1]
+X = scipy.sparse.hstack([X, numpy.ones((X.shape[0], 1))])
 numInputDims = X.shape[1]
+
+data_val = load_svmlight_file(validationFileName, n_features=numInputFeatures, zero_based=True)
+X_val, y_val = data_val[0], data_val[1]
+X_val = scipy.sparse.hstack([X_val, numpy.ones((X_val.shape[0], 1))])
+
 print ("Number of input dimensions: %d" % numInputDims)
+print ("Train set | X shape: %s | Y shape: %s" % (X.shape, y.shape))
+print ("Validation set | X shape: %s | Y shape: %s" % (X_val.shape, y_val.shape))
+logFile.write ("Number of input dimensions: %d\n" % numInputDims)
+logFile.write ("Train set | X shape: %s | Y shape: %s\n" % (X.shape, y.shape))
+logFile.write ("Validation set | X shape: %s | Y shape: %s\n" % (X_val.shape, y_val.shape))
 
 y_entries, y_count = numpy.unique(y, return_counts=True)
 print ("Dataset loaded successfully") 
@@ -121,7 +139,7 @@ for i in range(startingIteration, numIterations):
 		pool = mp.Pool(processes=numProcesses)
 		results = pool.map(parallel, y_entries)
 		# parallel(y_entries[0])
-		print ("All subproblems solved for the current iteration")
+		print ("All subproblems solved for the iteration # %d" % i)
 		endTime = time.time()
 		print ("Time elapsed: %s secs" % (endTime - startingTime))
 		logFile.write("Iteration: %d | Time elapsed in computation: %s secs\n" % (i, str(endTime - startingTime)))
@@ -131,10 +149,22 @@ for i in range(startingIteration, numIterations):
 		# Read all of the saved numpy files to compute the optimal hyperplane
 		w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1] + 1, 1)))
 		weightFileList = os.listdir(weightsDir)
+		
+		trainScores = []
+		validationScores = []
 		for weightVectorFileName in weightFileList:
 			# weightVector = numpy.load(os.path.abspath(os.path.join(weightsDir, weightVectorFileName)))
 			weightVector = scipy.sparse.load_npz(os.path.abspath(os.path.join(weightsDir, weightVectorFileName)))
 			w_bar += weightVector
+
+			# Compute the train set outputs
+			out = X.dot(weightVector)
+			trainScores.append(out.toarray())
+
+			# Compute the validation set outputs
+			out = X_val.dot(weightVector)
+			validationScores.append(out.toarray())
+
 		w_bar /= len(weightFileList)
 		fileName = os.path.abspath(os.path.join(weightsDir, 'w_bar_' + str(i) + '.npz'))
 		scipy.sparse.save_npz(fileName, w_bar)
@@ -143,6 +173,38 @@ for i in range(startingIteration, numIterations):
 		endTime = time.time()
 		print ("Total time elapsed (one iteration): %s secs" % (endTime - startingTime))
 		logFile.write ("Iteration: %d | Total time elapsed (one iteration): %s secs\n" % (i, str(endTime - startingTime)))
+
+		# Test the performance of the computed results on the validation set
+		trainScores = numpy.array(trainScores).T
+		validationScores = numpy.array(validationScores).T
+		print ("Train scores shape: %s" % str(trainScores.shape))
+		print ("Validation scores shape: %s" % str(validationScores.shape))
+
+		# Get the prediction according to maximum score with a hyper-plane
+		predictions_train = numpy.argmax(trainScores, axis=1)
+		predictions_val = numpy.argmax(validationScores, axis=1)
+		print ("Train predictions shape: %s" % str(predictions_train.shape))
+		print ("Validation predictions shape: %s" % str(predictions_val.shape))
+
+		for pred_iter in predictions_train.shape[0]:
+			predictions_train[pred_iter] = predictions_train[pred_iter]
+		for pred_iter in predictions_val.shape[0]:
+			predictions_val[pred_iter] = predictions_val[pred_iter]
+		
+		# Compare the predictions and the ground-truth
+		predictions_train = np.array(predictions_train)
+		predictions_val = np.array(predictions_val)
+		trainConfMat = confusion_matrix(y, predictions_train)
+		testConfMat = confusion_matrix(y_val, predictions_val)
+		print ("Train confusion matrix:", trainConfMat)
+		print ("Test confusion matrix:", testConfMat)
+
+		accuracy_train = np.mean(predictions_train == y)
+		accuracy_val = np.mean(predictions_val == y_val)
+		print ("Accuracy on train set: %f" % accuracy_train)
+		print ("Accuracy on validation set: %f" % accuracy_val)
+		logFile.write ("Accuracy on train set: %f\n" % (accuracy_train))
+		logFile.write ("Accuracy on validation set: %f\n" % (accuracy_val))
 
 	except KeyboardInterrupt:
 		print ("Caught KeyboardInterrupt, terminating workers")
