@@ -10,14 +10,21 @@ import shutil
 import pickle
 import os
 
+# Plotting utils
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
 DISPLAY_CONFUSION_MATRIX = False
+USE_SPARSE_MATRICES = False
 
 pickleDir = './PickleDir'
 weightsDir = './Weights'
 logFile = open("LogFile.txt", "w")
+plotOutputFileName = "plot"
+plotOutputLogFileName = open("plot-log.txt", "w")
 
-trainFileName = "train_20.txt"
-validationFileName = "validate_20.txt"
+trainFileName = "train_30.txt"
+validationFileName = "validate_30.txt"
 numInputFeatures = 1199856
 
 def parallel(y_entry): 
@@ -32,31 +39,33 @@ def parallel(y_entry):
 	g1 = -g1
 	g1 = scipy.sparse.csc_matrix(g1)
 	# h1 = numpy.array([-1+val.dot(w_bar) for val in g1])
-	h1 = g1.dot(w_bar).toarray() - 1
+	h1 = g1.dot(w_bar) - 1.0
 	h1.shape = (g1.shape[0],1)
 
 	# Shape of the weights will vary based on the number of examples in g1
-	# TODO: Change the conversion to np array due to presence of np operations in scatter_qp
-	weights = QP(g1.shape[1] - 1, g1.shape[0], w_bar.toarray(), numpy.ones((g1.shape[0], 1)), g1, h1)
+	weights = QP(g1.shape[1] - 1, g1.shape[0], w_bar, numpy.ones((g1.shape[0], 1), numpy.float32), g1, h1)
 
 	# Discard the sai_i's
 	weights = weights[:-g1.shape[0]].reshape(-1, 1)
-	weights = scipy.sparse.csc_matrix(weights) # For sparse vectors
-	fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(y_entry) + '.npz'))
-	scipy.sparse.save_npz(fileName, weights)
-	# numpy.save(fileName, weights)
+	if USE_SPARSE_MATRICES:
+		weights = scipy.sparse.csc_matrix(weights) # For sparse vectors
+		fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(y_entry) + '.npz'))
+		scipy.sparse.save_npz(fileName, weights)
+	else:
+		fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(y_entry) + '.npy'))
+		numpy.save(fileName, weights)
 	# print ("Weight vector computed for class: %d" % (y_entry))
 	
 print ("Loading dataset")
 data = load_svmlight_file(trainFileName, n_features=numInputFeatures, zero_based=True)
 X, y = data[0], data[1]
-X = scipy.sparse.hstack([X, numpy.ones((X.shape[0], 1))])
+X = scipy.sparse.hstack([X, numpy.ones((X.shape[0], 1), numpy.float32)])
 X = X.tocsc()
 numInputDims = X.shape[1]
 
 data_val = load_svmlight_file(validationFileName, n_features=numInputFeatures, zero_based=True)
 X_val, y_val = data_val[0], data_val[1]
-X_val = scipy.sparse.hstack([X_val, numpy.ones((X_val.shape[0], 1))])
+X_val = scipy.sparse.hstack([X_val, numpy.ones((X_val.shape[0], 1), numpy.float32)])
 X_val = X_val.tocsc()
 
 print ("Number of input dimensions: %d" % numInputDims)
@@ -105,11 +114,10 @@ if resumeTraining:
 			startingIteration = int(lastWBarFileName[lastWBarFileName.rfind('_')+1:lastWBarFileName.rfind('.')]) + 1
 
 	print ("Loading w_bar from file: %s" % (lastWBarFileName))	
-	# w_bar = numpy.load(lastWBarFileName)
-	w_bar = scipy.sparse.load_npz(lastWBarFileName)
+	w_bar = numpy.load(lastWBarFileName)
 	print ("Training will resume from iteration # %d" % (startingIteration))
 else:
-	w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1], 1)))
+	w_bar = numpy.zeros((X.shape[1], 1), numpy.float32)
 
 # Create class specific pickles
 print ("Number of classes found in data file: %d" % y_entries.shape[0])
@@ -140,7 +148,10 @@ if createClassInstanceFiles:
 		numpy.save(fileNameY, classY)
 		print ("Class # %d | Class ID: %d | Data shape: %s | Label shape: %s | Output file: %s" % (i, y_entries[i], classX.shape, classY.shape, fileName))
 
-numIterations = 100
+numIterations = 25
+trainAccuracy = []
+validationAccuracy = []
+wBarDifferenceNorm = []
 for i in range(startingIteration, numIterations):
 	try:
 		startingTime = time.time()
@@ -158,16 +169,18 @@ for i in range(startingIteration, numIterations):
 
 		# w' is the combination of the w's found for each class
 		# Read all of the saved numpy files to compute the optimal hyperplane
-		w_bar = scipy.sparse.csc_matrix(numpy.zeros((X.shape[1], 1)))
+		w_bar_new = numpy.zeros((X.shape[1], 1), numpy.float32)
 		
 		trainScores = []
 		validationScores = []
-		# for weightVectorFileName in weightFileList:
 		for y_entry in y_entries:
-			fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(int(y_entry)) + '.npz'))
-			# weightVector = numpy.load(os.path.abspath(os.path.join(weightsDir, weightVectorFileName)))
-			weightVector = scipy.sparse.load_npz(fileName)
-			w_bar += weightVector
+			if USE_SPARSE_MATRICES:
+				fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(int(y_entry)) + '.npz'))
+				weightVector = scipy.sparse.load_npz(fileName)
+			else:
+				fileName = os.path.abspath(os.path.join('./Weights', 'w_' + str(int(y_entry)) + '.npy'))
+				weightVector = numpy.load(fileName)
+			w_bar_new += weightVector
 
 			# Compute the train set outputs
 			out = X.dot(weightVector)
@@ -177,10 +190,15 @@ for i in range(startingIteration, numIterations):
 			out = X_val.dot(weightVector)
 			validationScores.append(numpy.squeeze(out.toarray()))
 
-		w_bar /= y_entries.shape[0]
-		fileName = os.path.abspath(os.path.join(weightsDir, 'w_bar_' + str(i) + '.npz'))
-		scipy.sparse.save_npz(fileName, w_bar)
-		# numpy.save(fileName, w_bar)
+		w_bar_new /= y_entries.shape[0]
+		fileName = os.path.abspath(os.path.join(weightsDir, 'w_bar_' + str(i) + '.npy'))
+		numpy.save(fileName, w_bar_new)
+
+		# Compute the difference between the new and the old w_bar
+		euclidean_norm_w_bar_diff = numpy.linalg.norm(w_bar - w_bar_new)
+
+		# Replace the old w_bar with the new w_bar
+		w_bar = w_bar_new
 
 		endTime = time.time()
 		print ("Total time elapsed (one iteration): %s secs" % (endTime - startingTime))
@@ -213,8 +231,15 @@ for i in range(startingIteration, numIterations):
 		accuracy_val = numpy.mean(predictions_val == y_val)
 		print ("Accuracy on train set: %f" % accuracy_train)
 		print ("Accuracy on validation set: %f" % accuracy_val)
+		print ("Euclidean-Norm of change in w_bar: %f" % (euclidean_norm_w_bar_diff))
 		logFile.write ("Accuracy on train set: %f\n" % (accuracy_train))
 		logFile.write ("Accuracy on validation set: %f\n" % (accuracy_val))
+		logFile.write ("Euclidean-Norm of change in w_bar: %f\n" % (euclidean_norm_w_bar_diff))
+		plotOutputLogFileName.write("%f %f %f\n" % (accuracy_train, accuracy_val, euclidean_norm_w_bar_diff))
+
+		trainAccuracy.append(accuracy_train)
+		validationAccuracy.append(accuracy_val)
+		wBarDifferenceNorm.append(euclidean_norm_w_bar_diff)		
 
 	except KeyboardInterrupt:
 		print ("Program terminated by user!")
@@ -223,3 +248,30 @@ for i in range(startingIteration, numIterations):
 		break
 
 logFile.close()
+plotOutputLogFileName.close()
+
+# Plot the figures
+fig, ax = plt.subplots()
+ax.set_title('Accuracy Plot')
+numListElements = len(trainAccuracy)
+x = numpy.arange(0, numListElements)
+ax.plot(x, trainAccuracy, color='green', label='Train', linewidth=2.0)
+ax.plot(x, validationAccuracy, color='blue', label='Test', linewidth=2.0)
+ax.legend()
+
+ax.set_xlabel('Iterations')
+ax.set_ylabel('Accuracy')
+plt.tight_layout()
+plt.savefig(plotOutputFileName + "-Accuracy.png", dpi=300)
+
+fig, ax = plt.subplots()
+ax.set_title(r'Change in $\overline{W}$')
+ax.plot(x, wBarDifferenceNorm, color='red', linewidth=2.0)
+ax.legend()
+
+ax.set_xlabel('Iterations')
+ax.set_ylabel(r'$\Delta\overline{W}$')
+
+plt.tight_layout()
+plt.savefig(plotOutputFileName + "-Change.png", dpi=300)
+plt.close('all')
