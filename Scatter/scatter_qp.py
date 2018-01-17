@@ -11,6 +11,7 @@ def QP(feature_size,sample_size,w_bar,mu_c,g1,h1):
     P = sparse.csc_matrix(P)
     
     q = numpy.vstack((-w_bar,mu_c))
+    # q = sparse.vstack((-w_bar,mu_c))
 
     g2 = -sparse.identity(sample_size)
     G = sparse.bmat([ [g1,g2] ])
@@ -18,7 +19,7 @@ def QP(feature_size,sample_size,w_bar,mu_c,g1,h1):
    
     u = h1
     
-    l = -numpy.inf*numpy.ones((sample_size,1))
+    l = -numpy.inf*numpy.ones((sample_size,1), numpy.float32)
  
     prob = osqp.OSQP()
     prob.setup(P=P, q=q, A=G, l=l, u=u, verbose=False)

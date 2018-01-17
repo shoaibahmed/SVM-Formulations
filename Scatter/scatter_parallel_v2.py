@@ -13,14 +13,17 @@ import os
 # Plotting utils
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import seaborn as sn
+import pandas as pd
 
-DISPLAY_CONFUSION_MATRIX = False
-USE_SPARSE_MATRICES = False
+DISPLAY_CONFUSION_MATRIX = True
+USE_SPARSE_MATRICES = True
 
 pickleDir = './PickleDir'
 weightsDir = './Weights'
 logFile = open("LogFile.txt", "w")
-plotOutputFileName = "plot"
+plotOutputFileName = "Plot"
+confMatOutputFileName = "ConfMat"
 plotOutputLogFileName = open("plot-log.txt", "w")
 
 trainFileName = "train_30.txt"
@@ -148,10 +151,12 @@ if createClassInstanceFiles:
 		numpy.save(fileNameY, classY)
 		print ("Class # %d | Class ID: %d | Data shape: %s | Label shape: %s | Output file: %s" % (i, y_entries[i], classX.shape, classY.shape, fileName))
 
-numIterations = 25
+numIterations = 100
 trainAccuracy = []
 validationAccuracy = []
 wBarDifferenceNorm = []
+trainPredictions = []
+validationPredictions = []
 for i in range(startingIteration, numIterations):
 	try:
 		startingTime = time.time()
@@ -221,12 +226,6 @@ for i in range(startingIteration, numIterations):
 		for pred_iter in range(predictions_val.shape[0]):
 			predictions_val[pred_iter] = y_entries[predictions_val[pred_iter]]
 		
-		if DISPLAY_CONFUSION_MATRIX:
-			trainConfMat = sklearn.metrics.confusion_matrix(y, predictions_train)
-			testConfMat = sklearn.metrics.confusion_matrix(y_val, predictions_val)
-			print ("Train confusion matrix:", trainConfMat)
-			print ("Test confusion matrix:", testConfMat)
-
 		accuracy_train = numpy.mean(predictions_train == y)
 		accuracy_val = numpy.mean(predictions_val == y_val)
 		print ("Accuracy on train set: %f" % accuracy_train)
@@ -239,7 +238,10 @@ for i in range(startingIteration, numIterations):
 
 		trainAccuracy.append(accuracy_train)
 		validationAccuracy.append(accuracy_val)
-		wBarDifferenceNorm.append(euclidean_norm_w_bar_diff)		
+		wBarDifferenceNorm.append(euclidean_norm_w_bar_diff)
+
+		trainPredictions.extend(predictions_train)
+		validationPredictions.extend(predictions_val)
 
 	except KeyboardInterrupt:
 		print ("Program terminated by user!")
@@ -267,7 +269,6 @@ plt.savefig(plotOutputFileName + "-Accuracy.png", dpi=300)
 fig, ax = plt.subplots()
 ax.set_title(r'Change in $\overline{W}$')
 ax.plot(x, wBarDifferenceNorm, color='red', linewidth=2.0)
-ax.legend()
 
 ax.set_xlabel('Iterations')
 ax.set_ylabel(r'$\Delta\overline{W}$')
@@ -275,3 +276,18 @@ ax.set_ylabel(r'$\Delta\overline{W}$')
 plt.tight_layout()
 plt.savefig(plotOutputFileName + "-Change.png", dpi=300)
 plt.close('all')
+
+if DISPLAY_CONFUSION_MATRIX:
+	print ("Plotting confusion matrices")
+	def addConfusionMatrix(confMat, fileName):
+		df_cm = pd.DataFrame(confMat, range(len(confMat)), range(len(confMat)))
+		sn.set(font_scale=1.0) #for label size
+		sn.heatmap(df_cm, xticklabels=False, yticklabels=False, cbar=True, annot=False)
+		plt.tight_layout()
+		plt.savefig(fileName, dpi=300)
+		plt.close('all')
+
+	trainConfMat = sklearn.metrics.confusion_matrix(y, trainPredictions)
+	validationConfMat = sklearn.metrics.confusion_matrix(y_val, validationPredictions)
+	addConfusionMatrix(trainConfMat, confMatOutputFileName + "-Train.png")
+	addConfusionMatrix(validationConfMat, confMatOutputFileName + "-Test.png")
