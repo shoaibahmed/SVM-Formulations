@@ -197,16 +197,12 @@ for i in range(startingIteration, numIterations):
 		predictions_val = numpy.argmax(validationScores, axis=1)
 		print ("Train predictions shape: %s" % str(predictions_train.shape))
 		print ("Validation predictions shape: %s" % str(predictions_val.shape))
-
-		for pred_iter in range(predictions_train.shape[0]):
-			predictions_train[pred_iter] = predictions_train[pred_iter]
-		for pred_iter in range(predictions_val.shape[0]):
-			predictions_val[pred_iter] = predictions_val[pred_iter]
 		
-		# Compare the predictions and the ground-truth
-		predictions_train = numpy.array(predictions_train)
-		predictions_val = numpy.array(predictions_val)
-
+		for pred_iter in range(predictions_train.shape[0]):
+			predictions_train[pred_iter] = y_entries[predictions_train[pred_iter]]
+		for pred_iter in range(predictions_val.shape[0]):
+			predictions_val[pred_iter] = y_entries[predictions_val[pred_iter]]
+		
 		if DISPLAY_CONFUSION_MATRIX:
 			trainConfMat = sklearn.metrics.confusion_matrix(y, predictions_train)
 			testConfMat = sklearn.metrics.confusion_matrix(y_val, predictions_val)
